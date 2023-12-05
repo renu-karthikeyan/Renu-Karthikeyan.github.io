@@ -2,12 +2,11 @@
 layout: page
 title: Case Study 1: Beers & Breweries for Budweiser
 description: A case study into the beers and breweries dataset for MSDS 6306
-img: assets/img/12.jpg
+img: assets/img/Beers.jpeg
 importance: 1
 category: work
 ---
 
-<!DOCTYPE html>
 
 <html>
 
