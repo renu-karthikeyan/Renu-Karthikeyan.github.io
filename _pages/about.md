@@ -9,7 +9,7 @@ profile:
   image: RenuKarthikeyan.JPG
   image_circular: false # crops the image to make it circular
   more_info: >
-    <p>Denver, Colorado 12345</p>
+    <p> Denver, Colorado </p>
 
 news: true  # includes a list of news items
 latest_posts: true  # includes a list of the newest posts
