@@ -1,6 +1,6 @@
 ---
 layout: page
-title: Case Study 1: Beers & Breweries for Budweiser
+title: Beers & Breweries for Budweiser
 description: A case study into the beers and breweries data set for MSDS 6306 by Joel Laskow and Renu Karthikeyan
 img: assets/img/Beers.jpeg
 importance: 1
