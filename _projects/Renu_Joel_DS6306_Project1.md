@@ -7,7 +7,7 @@ importance: 1
 category: work
 ---
 
-<[https://renu-karthikeyan.shinyapps.io/Beer2/]>
+[Link to Shiny App](https://renu-karthikeyan.shinyapps.io/Beer2/)
 
 <html>
 
