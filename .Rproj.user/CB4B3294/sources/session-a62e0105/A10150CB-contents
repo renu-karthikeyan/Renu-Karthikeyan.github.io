@@ -1,0 +1,720 @@
+---
+title: "CaseStudy2 Attrition"
+author: "Renu Karthikeyan"
+date: "November/December 2023"
+output: 
+  html_document:
+    fig_width: 5
+    fig_height: 4
+    fig_retina: 2  # Set to 2 for higher resolution
+ # word_document: default
+ # pdf_document: default
+---
+
+```{r setup, include=FALSE, warning=F ,message = F}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+```
+
+# Statement of Purpose: 
+I am pleased to present this case study on Frito Lay attrition, which aims to analyze and derive actionable insights from the workforce data at Frito Lay. The purpose of this study is to understand the factors influencing employee attrition, develop predictive models for attrition risk, and evaluate the performance of the predictive models. 
+
+
+# Objectives: 
+1. Data Exploration and Visualization: Conduct a thorough exploration of the available workforce data to gain insights into the distribution of various attributes.Visualize key trends and patterns related to attrition, employee demographics, and other relevant factors.
+2. Predictive Modeling: Use K-nearest neighbors (KNN) and Naive Bayes, to build predictive models for employee attrition.Evaluate the performance of each model and identify the most effective approach in predicting attrition risk.
+Create linear regression model to predict salary for employees, given all other predictors. 
+3. Shiny App Development: Create an interactive Shiny app to visualize and communicate the insights derived from the analysis.Provide a user-friendly platform for stakeholders to explore the data and understand the implications of the findings.
+4. Communication and Collaboration: Effectively communicate the results and recommendations to stakeholders through clear and concise reports and presentations. 
+
+
+## Load and Install Libraries
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(aws.s3)
+library(RCurl)
+library(readr)
+library(base)
+library(tidyverse)
+library(naniar)
+library(class)
+library(GGally)
+library(e1071)
+library(car)
+library(fastDummies)
+```
+
+# Set AWS credentials, and Load in Datasets from Amazon S3 Bucket
+Here, loading in the data from the AWS S3 Bucket. I did some slight clean up of the data, to exclude the "Over18" column in the original data set and the Attrition test data set. The column name for ID in the No Salary data set was not the same, so I adjusted that. Also, I did a check for any missing values. There are no missing values in any of the data sets, so there is no need for imputing or deleting of rows. 
+```{r}
+Sys.setenv("AWS_ACCESS_KEY_ID" = "AKIATJ37QGJGSK4DGWN4" ,
+           "AWS_SECRET_ACCESS_KEY" = "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", 
+           "AWS_DEFAULT_REGION" = "us-east-2")
+
+# Load the Attrition data set from S3
+s3_path <- "s3://msds.ds.6306.2/CaseStudy2-data.csv"
+# Read the Attrition Data CSV file from S3
+Attritiondata <- aws.s3::s3read_using(read_csv, object = s3_path)
+head(Attritiondata,5)
+#summary(Attritiondata)
+vis_miss(Attritiondata) #checking for no missing values
+
+#Read CSV "testing" files from S3
+
+# Reading in of NoSalary Dataset from S3 Bucket
+NoSalary<-read.table( textConnection(getURL
+("https://msdsds6306.s3.us-east-2.amazonaws.com/CaseStudy2CompSet+No+Salary.csv"
+)), sep=",", header=TRUE)
+head(NoSalary,5)
+#summary(NoSalary)
+vis_miss(NoSalary)
+
+AttritionTest<- read.table(textConnection(getURL
+("https://msdsds6306.s3.us-east-2.amazonaws.com/CaseStudy2CompSet+No+Attrition.csv"
+)), sep=",", header=TRUE)
+head(AttritionTest,5)
+#summary(AttritionTest)
+vis_miss(AttritionTest)
+
+Attritiondata <- subset(Attritiondata, select = -c(Over18))
+head(Attritiondata,5)
+colnames(NoSalary)[colnames(NoSalary)=="ï..ID"] <- "ID"
+colnames(NoSalary)
+AttritionTest <- subset(AttritionTest, select = -c(Over18))
+head(AttritionTest,5)
+
+
+```
+
+# EDA
+
+##  Looking at relationships within overall data, not just those attrited 
+
+```{r}
+ggplot(data=Attritiondata, aes(x=JobSatisfaction)) +geom_bar(position="dodge") + theme_minimal() + ggtitle("Overall Job Satisfaction")
+```
+Here, we look at overall Job Satisfaction among the employees. It looks like majority of employees seem to be satisfied with their job, with a handful not being as satisfied. It is a left skewed histogram. 
+
+```{r}
+ggplot(data=Attritiondata,aes(x=MonthlyIncome, y=Age)) + geom_point(position="jitter") + facet_wrap(~MaritalStatus)+geom_smooth(method="loess") + ggtitle("Monthly Income and Age categorized by Marital Status")
+```
+Here, we see Monthly Income by Age categorized by Marital Status. Starting off, it looks like Divorced and Married people tend to make more as their age increases. However, the same positive trend is seen for Single people, but they do not make as much as their Married or Divorced coworkers. But there is definitely a positive trend between age and monthly income.  
+```{r}
+ggplot(data = Attritiondata, aes(x = MonthlyIncome, y = Age, color = JobInvolvement)) +
+  geom_point(position = "jitter") +
+  geom_smooth(method = lm) +
+  ggtitle("Job Involvement and Monthly Income") + facet_wrap(~JobInvolvement)
+```
+Looking at job involvement and monthly Income, it looks most employees regardless of Job Involvement have a positive correlation between Age and Monthly Income. I was trying to see if those who were more involved in their job made a higher income, but that does not seem to be the case at first glance. It looks like a lot of employees are pretty involved in their jobs (Job Involvement levels 2 and 3). 
+
+```{r}
+ggplot(data = Attritiondata, aes(x = MonthlyIncome, y = Age, color = interaction(JobInvolvement))) +
+  geom_point(position = "jitter") +
+  geom_smooth(method = lm, se = FALSE) +
+  ggtitle("Job Involvement and Monthly Income")
+```
+When I plotted all 4 job levels with their respective linear regression lines, it looks like those with least job involvement (Job Involvement 1) start to make more after crossing 40 years old and a monthly income of 10,000. It seems like Job Involvement 3 make the most starting off up to a monthly income of 10,000 and ~40 years old, and start to make the least as they near 50 years old. Job Involvements 2 and 4 linear regression lines fall in between the 1 and 4 lines initially and towards the end, they are very close to each otehr, and seem to overlap.
+
+```{r}
+ggplot(data=Attritiondata,aes(x=MonthlyIncome,y=NumCompaniesWorked)) + geom_point(position="jitter")  + geom_smooth(method=lm) + ggtitle("Number of Companies Worked and Monthly Income")
+```
+There is positive correlation between Monthly Income and Number of Companies worked.
+
+```{r}
+ggplot(data = Attritiondata, aes(x = MonthlyIncome)) + geom_histogram()  + ggtitle("Monthly Income Histogram")
+```
+Looking at a histogram of Monthly Income, it looks to be right skewed. The mode is less than the median which is less than the mean. 
+
+```{r}
+ggplot(data=Attritiondata,aes(x=MonthlyIncome)) + geom_histogram() + ggtitle("Monthly Income Histogram Categorized by Gender") + facet_wrap(~Gender)
+```
+Looking at monthly income categorized by Gender, it looks like there are more male datapoints in the dataset than femalses. The mode is higher for men than it is for women. Both histograms are right skewed. 
+
+```{r}
+ggplot(data=Attritiondata,aes(x=MonthlyIncome, y=DistanceFromHome)) + geom_point(position="jitter") + geom_smooth(method=loess) + ggtitle("Monthly Income and Distance from Home")
+```
+There seems to be a negative correlation between distance from home and monthly income. The plot and loess curve imply that as distance from home initially increases, monthly income also increases, but after a monthly income of 15,000 is exceeded, there is an overall decrease in the distance from home. The curve resembles a concave curve, with the downward slight 'w' shape. Looking at this graph, I would interpret distance from home to be in miles, because if this is in kilometers, it doesn't seem to make logical sense. 
+
+```{r}
+ggplot(data=Attritiondata,aes(x=MonthlyIncome, y=DistanceFromHome)) + geom_point(position="jitter") + geom_smooth(method=loess) + facet_wrap(~Gender) + ggtitle("Monthly Income and Distance from Home categorized by Gender")
+```
+There seems to be a more prominent downturned 'w' shape for women than for men. But the overall relationship is as mentioned above (between distance from home and Monthly Income).
+
+```{r}
+ggplot(data=Attritiondata, aes(x=Department, y=JobSatisfaction, color = Gender)) + geom_point(position ="jitter") + facet_wrap(~Gender) + ggtitle("Department and Job Satisfaction by Gender")
+```
+Job Satisfaction seems to be higher for Research and Development for both Males and Females. There are less data points for those in Human Resources so a clear defined relationship can't be concluded. There seems to be decent job satisfaction for those in Sales too for both genders. 
+
+```{r}
+ggplot(data=Attritiondata,aes(x=Age, y=TotalWorkingYears, color = MonthlyIncome)) + geom_point(position = "jitter") + ggtitle("Age and Total Working Years with Monthly Income")
+```
+This plot confirms that as Age increases, total working years also increase, and monthly income seems to follow the same trend as well. There is a positive correlation between all 3 variables - Age, Total working years, and monthly income. 
+
+## Attrition Specific Analysis
+I filtered the data to look at specifically those who Attrited, to find some insights and relationships between the variables. 
+```{r}
+attrition_yes <- dplyr::filter(Attritiondata, Attrition == "Yes")
+```
+
+```{r}
+ggplot(data = attrition_yes, aes(x = Department, fill = Gender))+ geom_bar(position = "dodge") + 
+  ggtitle("Attrition by Department and Gender") + theme_minimal()
+```
+Of those who left the company, many men were in Research & Development and Sales, while there were equal amounts of women in Research & Development and Sales. There are equal amounts of men and women from Human resources who left the company. 
+
+```{r}
+ggplot(data = attrition_yes, aes(y = JobSatisfaction , x = DistanceFromHome, color = MonthlyIncome))+ 
+geom_point(position = "jitter") + theme_minimal() + geom_smooth(method =lm) + ggtitle("Attrition by Distance from Home, Job Satisfaction with Monthly Income")
+```
+Of those who left the company, it seems likes a lot of them were making under $10,000 monthly. There seems to be a negative relationship between Job Satisfaction and Distance from home (as distance from home increases in miles, the job satisfaction goes down). 
+
+```{r}
+ggplot(data = attrition_yes, aes(y=JobLevel, x = MonthlyIncome, color = Age))+
+  geom_point(position="jitter")+geom_smooth(method=lm) + ggtitle("Monthly Income and Job Level with Age")
+```
+Of those who left the company, there is a positive relationship between job level and Monthly income. Age seems to be scattered, but at a job level of around 1, and monthly income less than 5000, the age group seems to have employees in their 20s. 
+
+```{r}
+ggplot(data = attrition_yes, aes(y=JobLevel, x = Age, color = Gender))+
+  geom_point(position="jitter")+geom_smooth(method=lm) + ggtitle("Attrition Job Level by Age and Gender")
+```
+OF those who left the company, it looks like Job Level is positively correlated with Age for both Males and Females. The slope of the linear regression line for females seems to be more steep than it is for the males. 
+
+```{r}
+ggplot(data = attrition_yes, aes(x=OverTime, fill = Gender)) + geom_bar() + ggtitle("Attrition -  Overtime by Gender")
+```
+Of those who left the company, many employees were working over time. As mentioned earlier, there are more male data points compared to females, which is why at first glance it may seem a bit off. It looks like of the Over time group - approximately 70% were males, and 30% was females. 
+
+```{r}
+ggplot(data = attrition_yes, aes(x=NumCompaniesWorked, y = PercentSalaryHike)) + geom_point(position = "jitter") + theme_minimal()+geom_smooth(method = lm) + ggtitle ("Attrition - Percent Salary Hike and Number of Companies Worked")
+```
+There seems to be a slight downward trend when looking at the relationship between Number of companies worked and Percent salary hike. I was trying to see if the number of companies worked affected the percent salary hike positively. At first glance, it seems like there is no variation int he line, but if you observe closely, there is a slight downward trend. 
+
+```{r}
+ggplot(data = attrition_yes, aes(x = PercentSalaryHike, fill = OverTime)) +
+  geom_histogram( binwidth = 1, color = "black", alpha = 0.7) +
+  geom_density(aes(y = ..count..), fill = "transparent", color = "darkblue") +
+  labs(title = "Histogram with Trend Line of % Salary Hike by Overtime",
+       x = "Percent Salary Hike", y = "Count") +
+  theme_minimal() + theme(legend.position = "top")  # Adjust legend position
+```
+This is a histogram of percent salary hike, with each bar being split and shaded by if the employee(s) were working over time. The overall percent salary hike (without the split) seems to be right skewed generally, but the shape of the line/trend seems to imply that it may be multimodal. 
+
+```{r}
+ggplot(data = attrition_yes, aes(x=YearsAtCompany, y = PercentSalaryHike, color = PerformanceRating)) + geom_point() + theme_minimal() + ggtitle("Salary Hike v. Years at Company with Performance Rating")
+```
+This plot takes a look at Years at Company and Percent salary hike. Those with a higher performance rating seem to have a higher percent salary hike. For a Percent salary hike less than 20%, it seems like the performance rating is under 4, and trends around the 3 rating. 
+```{r}
+ggplot(data = attrition_yes, aes(y=JobSatisfaction, x = Education)) + geom_point(position="jitter") + theme_minimal() + ggtitle("Job Satisfaction v. Education Categorized by Education Field") + facet_wrap(~EducationField) + geom_smooth(method = lm)
+```
+This plot looks at the relationship between Job Satisfaction based on Education categorized by education field. Most education fields seem to have a negative correlation between job satisfaction and years of education, except for the Medical field. The medical field is the only field where as education increases, the job satifaction also seems to increase. 
+
+
+#Building a Regression Model to Determine Salary
+
+## Regression Model 1 Using All Predictors to Determine Salary
+Monthly Income is the "salary" variable
+```{r}
+class(Attritiondata$MonthlyIncome)
+sum(is.na(Attritiondata$MonthlyIncome))
+summary(Attritiondata)
+
+# Identify character variables
+char_vars <- sapply(Attritiondata, is.character)
+# Convert character variables to factors
+Attritiondata[, char_vars] <- lapply(Attritiondata[, char_vars], as.factor)
+
+#Check Factor Levels for Categorical variables:
+sapply(Attritiondata[,char_vars],levels)
+  #Noticed Over18 has only 1 factor level; so going to remove from dataset
+ # Attritiondata <- subset(Attritiondata, select = -c(Over18))
+
+# Fit the linear regression model with all predictors
+Model1_fit <- lm(MonthlyIncome ~ ., data = Attritiondata)
+summary(Model1_fit)
+
+#p val < alpha of .05, it affects the Salary Variable
+
+#Model1_Preds = predict(Model1_fit, newdata = NoSalary) #this is an example of predict function you would want to use
+#as.data.frame(Model1_Preds)
+#write.csv(Model1_Preds,"Model1PredictionsNoSalaryRenuKarthikeyan.csv")
+```
+Looking at this summary of model 1 output, it indicates that the statistically significant p values are Business Travel, JobLevel, Job Role, Performance rating, Total working Years, and Years since last promotion. The F-statistic tests the overall significance of the model. The F-statistic is 340.7 with a very small p-value (< 2.2e-16), suggests that at least one predictor variable is significantly related to Monthly Income.There are two coefficients not defined because of singularities. This might indicate multicollinearity, where two or more predictor variables are highly correlated.
+
+
+
+## Linear Regression using Select predictors to Determine Salary 
+```{r}
+Model2_fit = lm(MonthlyIncome ~ NumCompaniesWorked + Age + Gender + MaritalStatus + JobInvolvement + JobRole + DistanceFromHome + JobLevel + Education, data = Attritiondata)
+summary(Model2_fit) # P value overall implies that at least one of my variables' slope != 0. 
+
+NoSalary$MonthlyIncome = predict(Model2_fit,newdata = NoSalary)
+
+#Model2_Preds<- NoSalary %>% select(c("ID","MonthlyIncome"))
+#as.data.frame(Model2_Preds)
+#write.csv(Model2_Preds,"Model2PredictionsNoSalaryRenuKarthikeyan.csv", row.names = T)
+```
+These select predictors were chosen because of the insights from the EDA. I thought they were significant predictors. The coefficient for JobLevel is 3042.789. This suggests that, on average, an increase of one unit in JobLevel is associated with an increase of 3042.789 dollars in MonthlyIncome.Likewise, Age has a coefficient of 12.875 indicating that a year increase in age, results in 12.88 dollars additional monthly income, holding all other variables constant. Males have a coefficient of 120, indicating that holding all other variables constant, males make an additional 120 dollars compared to women monthly. The coefficient for distance from home has a. -7.908, which indicates each additional mile away from home may result in a monthly salary decrease by -7 dollars. 
+
+The statistically significant p values (<.10) are Age, certain Job Roles – like Laboratory Technician, Manager, and Research director, Job Level;
+
+Overall, Model 2 appears to have a high R-squared value, indicating a good fit to the data. Many predictors are statistically significant, suggesting they contribute to determining Monthly Income
+
+
+
+## Split and Train Linear Regression Models to Predict Salary, with average of cross validation
+```{r}
+set.seed(1234)
+TrainObs = sample(seq(1,dim(Attritiondata)[1]),round(.8*dim(Attritiondata)[1]),replace = FALSE)
+SalaryTrain = Attritiondata[TrainObs,]
+SalaryTrain
+SalaryTest = Attritiondata[-TrainObs,]
+SalaryTest
+
+Model1_fit <- lm(MonthlyIncome ~ ., data = Attritiondata)
+summary(Model1_fit)
+
+#Model1_Preds = predict(Model1_fit, newdata = NoSalary)
+#as.data.frame(Model1_Preds)
+#write.csv(Model1_Preds,"Model1PredictionsNoSalaryRenuKarthikeyan")
+    
+#Cross Validation and Mean Square Predictor Error Calculation
+    numMSPEs = 1000
+    MSPEHolderModel1 = numeric(numMSPEs)
+    MSPEHolderModel2 = numeric(numMSPEs)
+    RMSEHolderModel1 = numeric(numMSPEs)
+    RMSEHolderModel2 = numeric(numMSPEs)
+    
+    for (i in 1:numMSPEs)
+    {
+      TrainObs = sample(seq(1,dim(Attritiondata)[1]),round(.8*dim(Attritiondata)[1]),replace = FALSE)
+      SalaryTrain = Attritiondata[TrainObs,]
+      SalaryTrain
+      SalaryTest = Attritiondata[-TrainObs,]
+      SalaryTest
+      Model1_fit <- lm(MonthlyIncome ~ ., data = SalaryTrain)
+      Model1_Preds = predict(Model1_fit, newdata = SalaryTest)
+      
+      #MSPE Model 1
+      MSPE = mean((SalaryTest$MonthlyIncome - Model1_Preds)^2)
+      MSPE
+      MSPEHolderModel1[i] = MSPE
+      RMSEHolderModel1[i] = sqrt(MSPE)
+      
+      
+      #Model 2
+      Model2_fit = lm(MonthlyIncome ~ NumCompaniesWorked + Age + Gender + MaritalStatus + JobInvolvement + JobRole + DistanceFromHome + JobLevel + Education, data = SalaryTrain)
+      Model2_Preds = predict(Model2_fit,newdata = SalaryTest)
+      MSPE = mean((SalaryTest$MonthlyIncome - Model2_Preds)^2)
+      MSPE
+      MSPEHolderModel2[i] = MSPE
+      RMSEHolderModel2[i] = sqrt(MSPE)
+    }
+    
+    mean(MSPEHolderModel1)
+    mean(MSPEHolderModel2)
+    mean(RMSEHolderModel1)
+    mean(RMSEHolderModel2)
+    
+```
+- Data was split 80/20 – for training and testing
+- Ran both model 1 and 2 to predict Monthly Income on the testing set
+- Cross Validation Process with 1000 iterations where MSPE and RMSE are calculated for both models
+- Summary Statistics of mean MSPE and mean RMSE for both models
+
+Conclusion: Model 2 is the better fit as it has a lower mean RMSE and lower mean MSPE
+
+
+# KNN and Naive Bayes
+
+When I initially attempted to use all predictors for KNN,  each time, the model would unfortunately run into errors and say "Warning: NAs introduced by coercionError in knn(train_predictors, test_predictors, response_train, prob = TRUE,: NA/NaN/Inf in foreign function call (arg 6)", although there are no missing values in the Attritiondata data set. I later realized that it was due to NAs being assigned to the categorical variables during the KNN chunk. I created dummy columns for these categorical variables to get the KNN to function without running into errors. Below is the code used to create the dummy columns from the FastDummies package in R. 
+
+## Preparation of the Data - Including Dummy Columns for Categorical Variables
+```{r}
+Attritiondata$BusinessTravel<- as.factor(Attritiondata$BusinessTravel)
+Attritiondata$Department<- as.factor(Attritiondata$Department)
+Attritiondata$EducationField<- as.factor(Attritiondata$EducationField)
+Attritiondata$Gender<- as.factor(Attritiondata$Gender)
+Attritiondata$JobRole<- as.factor(Attritiondata$JobRole)
+Attritiondata$MaritalStatus<- as.factor(Attritiondata$MaritalStatus)
+Attritiondata$OverTime<- as.factor(Attritiondata$OverTime)
+
+
+Attritiondata<-dummy_cols(Attritiondata,select_columns=c("BusinessTravel","MaritalStatus","JobRole","Department","EducationField","OverTime","Gender"))
+
+Attritiondata <- Attritiondata %>% select(-c("BusinessTravel","MaritalStatus","JobRole","Department","EducationField","OverTime","Gender"))
+
+#Doing Same for Attrition Test Data Set (AttritionTest)
+AttritionTest$BusinessTravel<- as.factor(AttritionTest$BusinessTravel)
+AttritionTest$Department<- as.factor(AttritionTest$Department)
+AttritionTest$EducationField<- as.factor(AttritionTest$EducationField)
+AttritionTest$Gender<- as.factor(AttritionTest$Gender)
+AttritionTest$JobRole<- as.factor(AttritionTest$JobRole)
+AttritionTest$MaritalStatus<- as.factor(AttritionTest$MaritalStatus)
+AttritionTest$OverTime<- as.factor(AttritionTest$OverTime)
+
+
+AttritionTest<-dummy_cols(AttritionTest,select_columns=c("BusinessTravel","MaritalStatus","JobRole","Department","EducationField","OverTime","Gender"))
+
+AttritionTest <- AttritionTest %>% select(-c("BusinessTravel","MaritalStatus","JobRole","Department","EducationField","OverTime","Gender"))
+
+
+diff_columns_df1 <- setdiff(names(Attritiondata), names(AttritionTest))
+cat("Columns in df2 but not in df1:", paste(diff_columns_df1, collapse = ", "), "\n")
+
+
+```
+
+
+
+## KNN Model and Confusion Matrix - Training with All predictors
+```{r}
+set.seed(1234)
+iterations <- 100
+numks <- 10
+splitPerc <- 0.8
+
+masterAcc <- matrix(nrow = iterations, ncol = numks)
+
+
+for (j in 1:iterations) {
+  trainIndices <- sample(1:dim(Attritiondata)[1], round(splitPerc * dim(Attritiondata)[1]))
+  train <- as.data.frame(Attritiondata[trainIndices, ])
+  test <- as.data.frame(Attritiondata[-trainIndices, ])
+  
+  response_variable <- "Attrition"
+  response_train <- factor(train[[response_variable]])
+  response_test <- factor(test[[response_variable]])
+ 
+  
+  # Select columns for predictors
+  selected_columns <- c(1, 2, 4:36)  # Adjust this range as needed
+  
+  #selected_columns <- c("ID","Age","BusinessTravel","DailyRate","Department", "DistanceFromHome", "Education", "EducationField", "EmployeeCount", "EmployeeNumber","EnvironmentSatisfaction", "Gender", "HourlyRate", "JobInvolvement", "JobLevel", "JobRole", "JobSatisfaction", "MaritalStatus", "MonthlyIncome", "MonthlyRate", "NumCompaniesWorked", "OverTime", "PercentSalaryHike", "PerformanceRating", "RelationshipSatisfaction", "StandardHours", "StockOptionLevel", "TotalWorkingYears", "TrainingTimesLastYear", "WorkLifeBalance", "YearsAtCompany", "YearsInCurrentRole", "YearsSinceLastPromotion", "YearsWithCurrManager")
+  
+  # Extract the selected columns
+  train_predictors <- train[, selected_columns, drop = FALSE]
+  test_predictors <- test[, selected_columns, drop = FALSE]
+
+  train_predictors <- apply(train_predictors, 2, as.numeric)
+  test_predictors <- apply(test_predictors, 2, as.numeric)
+  
+  train_predictors <- scale(train_predictors)
+  test_predictors <- scale(test_predictors)
+  
+  # Convert to numeric matrices
+  train_predictors <- as.matrix(train_predictors)
+  test_predictors <- as.matrix(test_predictors)
+
+  # Remove infinite values
+  train_predictors[!is.finite(train_predictors)] <- 0
+  test_predictors[!is.finite(test_predictors)] <- 0
+  
+  
+if (sum(response_train == "Yes") > 0 && sum(response_test == "Yes") > 0) {
+  for (i in 1:numks) {
+    classifications <- knn(train_predictors, test_predictors, response_train, prob = TRUE, k = i)
+    table(classifications, response_test)
+    CM_AllK<- confusionMatrix(table(classifications, response_test), positive = "Yes")
+    masterAcc[j, i] <- CM_AllK$overall[1]
+     }
+  }
+}
+CM_AllK
+MeanAcc = colMeans(masterAcc); MeanAcc
+
+plot(seq(1, numks, 1), MeanAcc, type = "l", ylab = "Mean Accuracy (Positive Class: Yes)")
+
+which.max(MeanAcc)
+max(MeanAcc)
+
+```
+From the plot, we see that the best k is k = 7. The overall accuracy is 83.91%, but sensitivity (True Positive Rate) is low (10.35%).The model is better at correctly predicting the majority class ("No") but struggles with the minority class ("Yes").
+
+
+Looking specifically at the Confusion Matrix statistics, this is the output and the interpretation of each of these statistics: 
+- Sensitivity (True Positive Rate): 0.10345
+The proportion of actual positives correctly predicted for those who attrited. 
+- Specificity (True Negative Rate): 0.98621
+The proportion of actual negatives correctly predicted (for those who did not leave the company)
+- Positive Predictive Value (Precision): 0.60000
+The proportion of predicted positives that are true positives (attrited correctly identified as attrited)
+- Negative Predictive Value: 0.84615
+The proportion of predicted negatives that are true negatives. (not attrited correctly identified as not attrited)
+- Prevalence: 0.16667
+The proportion of actual positives in the dataset. (proportion of attrited in the overall dataset)
+
+#### TRYING THRESHOLD CHANGE for KNN - All predictors; k = 7
+```{r}
+set.seed(1234)
+iterations<- 100
+accuracy_table <- numeric(iterations)
+trainIndices <- sample(1:dim(Attritiondata)[1], round(splitPerc * dim(Attritiondata)[1]))
+accuracy_table <- numeric(iterations)  
+
+  train <- as.data.frame(Attritiondata[trainIndices, ])
+  test <- as.data.frame(Attritiondata[-trainIndices, ])
+
+  train_features<- train[, -which(names(train) == "Attrition")]
+  test_features<- test[, -which(names(test) == "Attrition")]
+  
+  train_target<- train$Attrition
+ # train_scaled<- scale(train_features) Using this in the knn returns "No missing values allowed"
+  #test_scaled<- scale(test_features)
+
+for (i in 1:iterations) {
+  classifications <- knn(train_features, test_features, train_target, prob = TRUE, k = 7)
+  table(classifications, response_test)
+  CM_AllK7 <- confusionMatrix(table(as.factor(test$Attrition),classifications), positive ="Yes")
+  accuracy_table[i] <- CM_AllK7$overall[1]
+}
+
+#print(accuracy_table)
+avg_accuracy<-mean(accuracy_table[1])
+avg_accuracy
+  
+specificity_table<- numeric(iterations)
+sensitivity_table<- numeric(iterations)
+for (i in 1:iterations) {
+   classifications <- knn(train_features, test_features, train_target, prob = TRUE, k = 7)
+  table(classifications, response_test)
+  CM_AllK7 <- confusionMatrix(table(as.factor(test$Attrition),classifications), positive ="Yes")
+  specificity_table[i] <- CM_AllK7$byClass['Specificity']
+  sensitivity_table[i] <- CM_AllK7$byClass['Sensitivity']
+}
+CM_AllK7
+avg_specificity<-mean(specificity_table[1])
+avg_specificity
+
+avg_sensitivity<-mean(sensitivity_table[1])
+avg_sensitivity
+
+###### New Threshold using classifications which used k = 7 from above
+
+#classifications
+#attributes(classifications) # Look at possible attributes
+#attributes(classifications)$prob # Probability of what was classified for that observation
+
+probs = ifelse(classifications == "Yes",attributes(classifications)$prob, 1- attributes(classifications)$prob)
+
+summary(Attritiondata$Attrition)
+140/(730+140) #16.09%
+
+NewClass = ifelse(probs > .1609, "Yes", "No")
+NewClass <- factor(NewClass, levels = levels(response_test))
+table(NewClass,response_test)
+CM_NewThreshold <- confusionMatrix(table(NewClass, response_test), positive = "Yes", mode = "everything")
+CM_NewThreshold
+
+```
+Similar to before, the loop ran for 100 iterations, but k was set to 7 when it came to knn. There are 2 confusion matrices. We have one, without the threshold changes, and one with the threshold change. The accuracy went down with the threshold change, while sensitivity reduced by a lot, and specificity reduced by ~10%. The positive predictive value increased by 9%, and the negative pred value reduced by 14%. 
+
+The new threshold has a lower accuracy compared to the original kNN classification.Sensitivity is significantly lower for the new threshold, indicating that fewer true positives are captured.Specificity is slightly lower for the new threshold, indicating a decrease in correctly identified true negatives.
+Precision is lower for the new threshold, reflecting a decrease in the accuracy of positive predictions.
+The original KNN classification has a higher accuracy and sensitivity compared to the new threshold.
+
+
+#Applying to the Test Model to predict attrition using KNN with all predictors (This is best model)
+```{r}
+train_features<- Attritiondata[, -which(names(Attritiondata) == "Attrition")]
+test_features<- AttritionTest[]#[, -which(names(AttritionTest)=="Attrition")]
+#head(test_features,5)
+train_target <- Attritiondata$Attrition
+
+AttritionClassifications <- knn(train_features, test_features, train_target, prob = TRUE, k = 7)
+AttritionTest$Attrition <- AttritionClassifications
+#head(AttritionTest,5)
+
+AttritionPredictionsKNN<-AttritionTest%>%select(c("ID","Attrition"))
+#head(AttritionPredictionsKNN,5)
+write.csv(AttritionPredictionsKNN,"CaseStudy2AttritionPredictionsKNN_RenuKarthikeyan.csv", row.names = T)
+
+```
+
+## KNN Using Select Predictors
+After doing my Exploratory Data Analysis, I believe the important predictors for Attrition are: Gender, Department,Job Satisfaction,Distance From Home,Monthly Income, Job Level, Age, Over Time, Percent Salary Hike, Performance Rating, and Education. 
+```{r}
+set.seed(1234)
+iterations = 100
+numks = 10
+splitPerc = .8
+
+masterAcc = matrix(nrow = iterations, ncol = numks)
+
+for (j in 1:iterations) {
+  trainIndices <- sample(1:dim(Attritiondata)[1], round(splitPerc * dim(Attritiondata)[1]))
+  train <- as.data.frame(Attritiondata[trainIndices, ])
+  test <- as.data.frame(Attritiondata[-trainIndices, ])
+  
+  response_train <- factor(train$Attrition)
+  response_test <- factor(test$Attrition)
+
+  #UPDATE HERE!!!!
+  #train_predictors <- train[, c(2,6,7,8,13,16,18,20,24,25,26)]
+  #test_predictors <- test[, c(2,6,7,8,13,16,18,20,24,25,26) ]
+
+  selected_cols <- c(2, 6, 7, 8, 13, 16, 18, 20, 24, 25, 26)
+
+  train_predictors <- train[, selected_cols] #subset function
+  test_predictors <- test[, selected_cols]
+
+  train_predictors <- apply(train_predictors, 2, as.numeric)
+  test_predictors <- apply(test_predictors, 2, as.numeric)
+  train_predictors <- scale(train_predictors)
+  test_predictors <- scale(test_predictors)
+  train_predictors <- as.matrix(train_predictors)
+  test_predictors <- as.matrix(test_predictors)
+
+  # Remove infinite values
+  train_predictors[!is.finite(train_predictors)] <- 0
+  test_predictors[!is.finite(test_predictors)] <- 0
+
+
+    for (i in 1:numks) {
+      classifications <- knn(train_predictors, test_predictors, response_train, prob =TRUE, k = i)
+      table(classifications, response_test)
+      CM_Select<- confusionMatrix(table(classifications, response_test), positive = "Yes")
+      masterAcc[j, i] <- CM_Select$overall[1]
+    }
+}
+CM_Select
+MeanAcc = colMeans(masterAcc); MeanAcc
+
+plot(seq(1, numks, 1), MeanAcc, type = "l", ylab = "Mean Accuracy (Positive Class: Yes)")
+
+which.max(MeanAcc)
+max(MeanAcc)
+```
+We see that the best k is k = 10. The confusion matrix is taking an average of all the k's tried. Here, the accuracy is 83.91%, similar to the initial average confusion matrix seen for all predictors using KNN. The sensitivity is quite low at 7.69%, suggesting that the model is struggling to correctly identify positive (true Attrition) instances. The model shows high specificity (97.30%), indicating a decent ability to correctly identify negative instances (not attrition).
+The positive predictive value (precision) is at 33.33%, indicating that among instances predicted as positive, about one-third are true positives.
+
+### TRYING k = 10  for KNN - Select predictors
+```{r}
+iterations<- 100
+accuracy_table <- numeric(iterations)
+trainIndices <- sample(1:dim(Attritiondata)[1], round(splitPerc * dim(Attritiondata)[1]))
+
+  train <- as.data.frame(Attritiondata[trainIndices, ])
+  test <- as.data.frame(Attritiondata[-trainIndices, ])
+
+  train_features<- train[, selected_cols]
+  test_features<- test[, selected_cols]
+  
+  train_target<- train$Attrition
+  train_scaled<- scale(train_features)
+  test_scaled<- scale(test_features)
+
+for (i in 1:iterations) {
+  classifications <- knn(train_features, test_features, train_target, prob = TRUE, k = 10)
+  table(classifications, response_test)
+  CM_SelectK <- confusionMatrix(table(as.factor(test$Attrition),classifications), positive ="Yes")
+  accuracy_table[i] <- CM_SelectK$overall[1]
+}
+
+#print(accuracy_table)
+avg_accuracy<-mean(accuracy_table[1]); avg_accuracy
+  
+specificity_table<- numeric(iterations)
+sensitivity_table<- numeric(iterations)
+for (i in 1:iterations) {
+   classifications <- knn(train_features, test_features, train_target, prob = TRUE, k = 10)
+  table(classifications, response_test)
+  CM_SelectK<- confusionMatrix(table(as.factor(test$Attrition),classifications), positive ="Yes")
+  specificity_table[i] <- CM_SelectK$byClass['Specificity']
+  sensitivity_table[i] <- CM_SelectK$byClass['Sensitivity']
+}
+CM_SelectK
+avg_specificity<-mean(specificity_table[1])
+avg_specificity
+
+avg_sensitivity<-mean(sensitivity_table[1])
+avg_sensitivity
+
+
+```
+We see the average specificity is 83.43% and sensitivity is 0%. This model's performance is notably poor, with zero sensitivity, meaning it failed to correctly identify any positive instances. The specificity and negative predictive value are relatively high, but the lack of sensitivity indicates a serious limitation in identifying instances of the positive class. This suggests that the model might need further refinement or a different approach to address the imbalance and improve its ability to correctly classify positive instances.
+
+## Naive Bayes and Confusion Matrix - Training with All predictors
+```{r}
+set.seed(1234)
+iterations = 100
+
+masterAcc = matrix(nrow = iterations)
+
+splitPerc = .8 #Training / Test split Percentage
+
+for(j in 1:iterations)
+{
+  trainIndices <- sample(1:dim(Attritiondata)[1], round(splitPerc * dim(Attritiondata)[1]))
+  train <- as.data.frame(Attritiondata[trainIndices, ])
+  test <- as.data.frame(Attritiondata[-trainIndices, ])
+  
+   train$Attrition <- factor(train$Attrition, levels = c("Yes", "No"))
+   test$Attrition <- factor(test$Attrition, levels = c("Yes", "No"))
+  
+    model <- naiveBayes(train[, -3], as.factor(train$Attrition), laplace = 1)
+   predictions <- predict(model, test[, -3])
+   confMatrix <- table(predictions, as.factor(test$Attrition))
+   CM_NB_All <- confusionMatrix(confMatrix)
+   masterAcc[j] <- CM_NB_All$overall[1]
+}
+CM_NB_All
+
+MeanAcc = colMeans(masterAcc); MeanAcc
+
+```
+Given all the predictors, the sensitivity rate of the model is the percentage of actual attrition cases correctly identified. It measures the model's ability to capture employees who are truly at risk of attrition among all employees who actually attrite. This model shows imbalanced performance with high sensitivity (high attrition) but low specificity. It performs well in identifying actual positive instances (attrition) but struggles to correctly identify negative instances(no attrition). The positive predictive value is relatively low, indicating that when it predicts a positive instance, it has a 20% chance of being correct. 
+
+## Naive Bayes and Confusion Matrix - Training; Using Select predictors to determine Attrition
+```{r}
+set.seed(1234)
+iterations = 100
+
+masterAcc = matrix(nrow = iterations)
+
+splitPerc = .8 #Training / Test split Percentage
+
+for(j in 1:iterations)
+{
+  trainIndices <- sample(1:dim(Attritiondata)[1], round(splitPerc * dim(Attritiondata)[1]))
+  train <- as.data.frame(Attritiondata[trainIndices, ])
+  test <- as.data.frame(Attritiondata[-trainIndices, ])
+ 
+   train$Attrition <- factor(train$Attrition, levels = c("Yes", "No"))
+   test$Attrition <- factor(test$Attrition, levels = c("Yes", "No"))
+  
+  model2 <- naiveBayes(train[, c(2, 6, 7, 8, 13, 16, 18, 20, 24, 25, 26)], as.factor(train$Attrition), laplace = 1)
+  predictions <- predict(model2, test[, c(2, 6, 7, 8, 13, 16, 18, 20, 24, 25, 26)])
+   confMatrix <- table(predictions, as.factor(test$Attrition))
+   CM_NB_Select <- confusionMatrix(confMatrix)
+   masterAcc[j] <- CM_NB_Select$overall[1]
+}
+CM_NB_Select
+
+MeanAcc = colMeans(masterAcc)
+
+MeanAcc
+
+#use predict function on the "validation" sets. Use the same model. Test will be validation set. 
+Predictions<- predict(model2,AttritionTest[,c(2, 5, 6, 7, 12, 15, 17, 19, 23, 24, 25)])
+
+AttritionTest$Attrition<- Predictions
+#View(AttritionTest$Attrition)
+
+AttritionPredictionsNB<- AttritionTest %>% select(c("ID","Attrition"))
+write.csv(AttritionPredictionsNB,"CaseStudy2AttritionPredictionsNB_RenuKarthikeyan.csv", row.names = T)
+```
+Sensitivity is 12%;  12% of actual attrition cases are correctly identified by the model. This suggests that the model may not be very effective at capturing employees who are truly at risk of attrition.
+This model has a higher accuracy of 85.06%, and has imbalanced performance with low sensitivity and high specificity. However, accuracy can be misleading, especially in imbalanced datasets where one class (e.g., "No attrition") dominates. In this case, accuracy is not the best metric to evaluate the model's performance. Positive predictive value (PPV) is at 42.86%. This indicates that when the model predicts attrition, there's a 42.86% chance that the prediction is correct. It reflects the precision of the model in identifying true positive cases among all instances predicted as positive. The low prevalence (the proportion of actual positive cases in the dataset) of attrition, is 14.37%. This low prevalence contributes to the imbalanced nature of the performance metrics.
+
+##### Best Model Determination from the Models tried for Attrition (KNN and Naive Bayes)
+It looks like the KNN model at k = 7 with all predictors without threshold adjustment has better accuracy within the KNN models. The Naive Bayes model with select predictors has the highest accuracy, and is better than the other Naive Bayes model which included all predictors. 
+
+Naive Bayes has a higher accuracy (85.06%) compared to KNN (79.89%). However, accuracy alone may not be the most informative metric, especially in imbalanced datasets.KNN has a higher sensitivity (40.00%) compared to Naive Bayes (12.00%). Sensitivity is crucial when identifying cases of attrition, as it represents the proportion of true positive cases among all actual positive cases.Naive Bayes has higher specificity (97.32%) compared to KNN (81.07%). Specificity is important when minimizing false positives, but it's essential to balance it with sensitivity.Naïve Bayes has a higher positive predictive value (precision) at 42.86%, while KNN has a lower precision at 5.88%. Precision indicates the accuracy of positive predictions.
+
+Of the 2 best models (best in KNN and best in Naive Bayes), I think the Naive Bayes is the better model to predict Attrition, given the high positive prediction value(precision), accuracy, and narrower confidence interval. 
+
+# Thank You
+This concludes this presentation and analysis. Thank you for your time and I look forward to empowering Frito Lay with data-driven wisdom. I created a shiny app to visualize and notice insights regarding the attrition data. Please feel free to look into the link provided. If you have any questions, please feel free to reach out to me, my email is in the attached PowerPoint presentation. Thank you!
