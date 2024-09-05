@@ -1,12 +1,7 @@
 github_users:
-  - torvalds
-  - alshedivat
+  - renu-karthikeyan
 
 github_repos:
-  - alshedivat/al-folio
-  - twbs/bootstrap
-  - jekyll/jekyll
-  - jquery/jquery
-  - FortAwesome/Font-Awesome
-  - jpswalsh/academicons
-  - mathjax/MathJax
+  - renu-karthikeyan/Attrition-Case-Study
+  - renu-karthikeyan/LifeExpectancy-Time-Series-Project-DS6373
+  - jlaskow/Beers-and-Breweries
